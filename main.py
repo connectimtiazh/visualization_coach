@@ -19,12 +19,12 @@ def add_pauses(text):
         text = text.replace(f'{phrase}', f'{phrase}...... ')
     return text
 
-def generate_audio(text):
+def generate_audio(text, voice=TTS_VOICE):
     try:
         text_with_pauses = add_pauses(text)
         response = client.audio.speech.create(
             model="tts-1",
-            voice=TTS_VOICE,
+            voice=voice,
             input=text_with_pauses
         )
         return io.BytesIO(response.content)
@@ -36,21 +36,16 @@ def process_audio(audio_content):
     try:
         speech = AudioSegment.from_mp3(audio_content)
         background = AudioSegment.from_mp3(BACKGROUND_MUSIC_PATH)
-
         background = background * (len(speech) // len(background) + 1)
         background = background[:len(speech)]
         background = background - BACKGROUND_VOLUME_REDUCTION
-
         final_audio = speech.overlay(background)
-
         silence = AudioSegment.silent(duration=2000)
         final_audio = silence + final_audio + silence
-
         filename = f"{uuid.uuid4()}.mp3"
         file_path = os.path.join(AUDIO_STORAGE_PATH, filename)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         final_audio.export(file_path, format="mp3")
-
         full_audio_url = f"{REPLIT_BASE_URL}/audio/{filename}"
         return full_audio_url
     except Exception as e:
@@ -69,6 +64,21 @@ def create_airtable_record(name, email, audio_link):
         print(f"Error creating Airtable record: {str(e)}")
         return None
 
+def generate_affirmations(goal):
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a motivational coach specializing in creating personalized affirmations. Create a list of 10 affirmations based on the user's goal. Use a mix of first-person and second-person statements."},
+                {"role": "user", "content": f"Create affirmations for the following goal: {goal}"}
+            ]
+        )
+        affirmations = response.choices[0].message.content.strip().split('\n')
+        return affirmations
+    except Exception as e:
+        print(f"Error generating affirmations: {str(e)}")
+        return None
+
 @app.route('/generate_audio', methods=['POST'])
 def generate_visualization_audio():
     data = request.json
@@ -77,6 +87,28 @@ def generate_visualization_audio():
 
     script = data['script']
     audio_content = generate_audio(script)
+    if not audio_content:
+        return jsonify({"error": "Failed to generate audio"}), 500
+
+    full_audio_url = process_audio(audio_content)
+    if not full_audio_url:
+        return jsonify({"error": "Failed to process audio"}), 500
+
+    return jsonify({"audio_link": full_audio_url}), 200
+
+@app.route('/generate_affirmations', methods=['POST'])
+def generate_affirmations_audio():
+    data = request.json
+    if not data or 'goal' not in data:
+        return jsonify({"error": "No goal provided"}), 400
+
+    goal = data['goal']
+    affirmations = generate_affirmations(goal)
+    if not affirmations:
+        return jsonify({"error": "Failed to generate affirmations"}), 500
+
+    affirmations_text = ". ".join(affirmations)
+    audio_content = generate_audio(affirmations_text, voice="alloy")  # Using a male voice
     if not audio_content:
         return jsonify({"error": "Failed to generate audio"}), 500
 
